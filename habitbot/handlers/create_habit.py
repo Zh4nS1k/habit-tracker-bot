@@ -16,6 +16,7 @@ from ..keyboards import (
     emoji_keyboard,
     main_menu_keyboard,
     reminder_initial_keyboard,
+    reminder_time_entry_keyboard,
     skip_keyboard,
     start_date_keyboard,
     target_date_keyboard,
@@ -204,6 +205,13 @@ async def create_target_callback(callback: CallbackQuery, state: FSMContext) -> 
 async def create_target_manual(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     start_iso = data.get("start_date")
+    if not start_iso:
+        await message.answer(
+            "Сначала выбери дату начала привычки.",
+            reply_markup=start_date_keyboard(),
+        )
+        await state.set_state(CreateHabit.waiting_start)
+        return
     start = parse_iso(start_iso)
     tz = await _user_zoneinfo(message.from_user.id)
     parsed = parse_user_date(message.text or "", tz)
@@ -323,14 +331,33 @@ async def _ask_reminder(message: Message, state: FSMContext) -> None:
 async def create_reminder_toggle(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, choice = callback.data.split(":", 3)
     if choice == "on":
+        user_settings = await get_user_settings(callback.from_user.id)
+        default_time = user_settings.get("default_reminder_time", settings.default_reminder_time)
         await state.update_data(reminder_enabled=True)
         await state.set_state(CreateHabit.waiting_reminder_time)
         await callback.message.answer(
             "Во сколько отправлять напоминание? Формат ЧЧ:ММ.",
+            reply_markup=reminder_time_entry_keyboard(default_time),
         )
     else:
         await state.update_data(reminder_enabled=False, reminder_time=None)
         await _show_summary(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(CreateHabit.waiting_reminder_time, F.data == "create:reminder:default")
+async def create_reminder_default(callback: CallbackQuery, state: FSMContext) -> None:
+    user_settings = await get_user_settings(callback.from_user.id)
+    default_time = user_settings.get("default_reminder_time", settings.default_reminder_time)
+    await state.update_data(reminder_time=default_time)
+    await _show_summary(callback.message, state)
+    await callback.answer("Используем время по умолчанию")
+
+
+@router.callback_query(CreateHabit.waiting_reminder_time, F.data == "create:reminder:cancel")
+async def create_reminder_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(reminder_enabled=False, reminder_time=None)
+    await _ask_reminder(callback.message, state)
     await callback.answer()
 
 

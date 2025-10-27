@@ -205,3 +205,22 @@ def reminder_initial_keyboard() -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def reminder_time_entry_keyboard(default_time: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"🕘 Использовать {default_time}",
+                    callback_data="create:reminder:default",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="create:reminder:cancel",
+                )
+            ],
+        ]
+    )
