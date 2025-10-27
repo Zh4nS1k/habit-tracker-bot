@@ -24,3 +24,9 @@ class TimezoneUpdate(StatesGroup):
 
 class SettingsReminder(StatesGroup):
     waiting_time = State()
+
+
+class EditHabit(StatesGroup):
+    waiting_name = State()
+    waiting_description = State()
+    waiting_emoji = State()

@@ -43,17 +43,17 @@ def habits_inline_keyboard(habits: Iterable[HabitDocument], action: str) -> Inli
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def emoji_keyboard() -> InlineKeyboardMarkup:
+def emoji_keyboard(prefix: str = "create:emoji") -> InlineKeyboardMarkup:
     rows = []
     row = []
     for emoji in EMOJI_CHOICES:
-        row.append(InlineKeyboardButton(text=emoji, callback_data=f"create:emoji:{emoji}"))
+        row.append(InlineKeyboardButton(text=emoji, callback_data=f"{prefix}:{emoji}"))
         if len(row) == 5:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="🎨 Другое", callback_data="create:emoji:custom")])
+    rows.append([InlineKeyboardButton(text="🎨 Другое", callback_data=f"{prefix}:custom")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -172,11 +172,17 @@ def habit_details_keyboard(habit: HabitDocument) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Отметить", callback_data=f"habit:done:{habit_id}"),
-                InlineKeyboardButton(text="🔔 Напоминание", callback_data=f"habit:reminder:menu:{habit_id}"),
+                InlineKeyboardButton(
+                    text="🔔 Напоминание", callback_data=f"habit:reminder:menu:{habit_id}"
+                ),
             ],
             [
                 InlineKeyboardButton(text="📊 Статистика", callback_data=f"habit:stats:{habit_id}"),
-                InlineKeyboardButton(text="🗑 Архив", callback_data=f"habit:archive:{habit_id}"),
+                InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"habit:edit:menu:{habit_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"habit:delete:{habit_id}"),
+                InlineKeyboardButton(text="🗂 Архивировать", callback_data=f"habit:archive:{habit_id}"),
             ],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="common:back_habits")],
         ]
@@ -222,5 +228,65 @@ def reminder_time_entry_keyboard(default_time: str) -> InlineKeyboardMarkup:
                     callback_data="create:reminder:cancel",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="✖️ Отмена",
+                    callback_data="create:cancel",
+                )
+            ],
+        ]
+    )
+
+
+def navigation_keyboard(cancel_cb: str = "create:cancel", back_cb: str | None = None) -> InlineKeyboardMarkup:
+    buttons = []
+    if back_cb:
+        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb))
+    buttons.append(InlineKeyboardButton(text="✖️ Отмена", callback_data=cancel_cb))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def with_navigation(
+    markup: InlineKeyboardMarkup,
+    *,
+    cancel_cb: str = "create:cancel",
+    back_cb: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows = list(markup.inline_keyboard)
+    nav_markup = navigation_keyboard(cancel_cb=cancel_cb, back_cb=back_cb)
+    rows.extend(nav_markup.inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def habit_edit_keyboard(habit_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✏️ Название", callback_data=f"habit:edit:name:{habit_id}"),
+                InlineKeyboardButton(text="🎨 Эмодзи", callback_data=f"habit:edit:emoji:{habit_id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📝 Описание", callback_data=f"habit:edit:description:{habit_id}"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"habit:view:{habit_id}")],
+        ]
+    )
+
+
+def delete_confirmation_keyboard(habit_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Удалить",
+                    callback_data=f"habit:delete:confirm:{habit_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⬅️ Отмена",
+                    callback_data=f"habit:view:{habit_id}",
+                ),
+            ]
         ]
     )

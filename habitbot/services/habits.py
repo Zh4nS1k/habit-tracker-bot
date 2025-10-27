@@ -300,3 +300,26 @@ async def has_completion_on_date(
         projection={"_id": True},
     )
     return bool(doc)
+
+
+async def update_habit_fields(
+    habit_id: str | ObjectId,
+    user_id: int,
+    **fields,
+) -> bool:
+    if not fields:
+        return False
+    oid = ObjectId(habit_id) if not isinstance(habit_id, ObjectId) else habit_id
+    fields["updated_at"] = utcnow()
+    result = await col_habits.update_one(
+        {"_id": oid, "user_id": user_id},
+        {"$set": fields},
+    )
+    return result.modified_count > 0
+
+
+async def delete_habit_permanently(habit_id: str | ObjectId, user_id: int) -> bool:
+    oid = ObjectId(habit_id) if not isinstance(habit_id, ObjectId) else habit_id
+    await col_records.delete_many({"habit_id": oid, "user_id": user_id})
+    result = await col_habits.delete_one({"_id": oid, "user_id": user_id})
+    return result.deleted_count > 0

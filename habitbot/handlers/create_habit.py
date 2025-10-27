@@ -17,6 +17,9 @@ from ..keyboards import (
     main_menu_keyboard,
     reminder_initial_keyboard,
     reminder_time_entry_keyboard,
+    repeat_mode_keyboard,
+    navigation_keyboard,
+    with_navigation,
     skip_keyboard,
     start_date_keyboard,
     target_date_keyboard,
@@ -31,12 +34,78 @@ from ..utils.dates import as_iso, format_display, parse_iso, parse_user_date
 router = Router(name="create_habit")
 settings = get_settings()
 TIME_RX = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+CANCEL_KEYWORDS = {"отмена", "cancel", "стоп"}
 
 
 async def _user_zoneinfo(user_id: int) -> ZoneInfo:
     info = await get_user_settings(user_id)
     tz_name = info.get("timezone", settings.timezone)
     return ZoneInfo(tz_name)
+
+
+def _is_cancel(text: Optional[str]) -> bool:
+    return bool(text) and text.strip().lower() in CANCEL_KEYWORDS
+
+
+async def _cancel_creation(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Создание привычки отменено.", reply_markup=main_menu_keyboard())
+
+
+async def _ask_name(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_name)
+    await message.answer(
+        CREATE_PROMPT,
+        reply_markup=navigation_keyboard(),
+    )
+
+
+async def _ask_emoji(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_emoji)
+    await message.answer(
+        "Выбери эмодзи, которое будем показывать рядом с привычкой:",
+        reply_markup=with_navigation(emoji_keyboard(), back_cb="create:back:name"),
+    )
+
+
+async def _ask_description(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_description)
+    await message.answer(
+        "Добавь короткое описание (например, цель или триггер) или пропусти шаг.",
+        reply_markup=with_navigation(skip_keyboard("create:description:skip"), back_cb="create:back:emoji"),
+    )
+
+
+async def _ask_start_date(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_start)
+    await message.answer(
+        "Когда стартуем?",
+        reply_markup=with_navigation(start_date_keyboard(), back_cb="create:back:description"),
+    )
+
+
+async def _ask_target_date(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_target)
+    await message.answer(
+        "Нужно задать дату завершения привычки? Это опционально.",
+        reply_markup=with_navigation(target_date_keyboard(), back_cb="create:back:start"),
+    )
+
+
+async def _ask_repeat_mode(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_repeat_mode)
+    await message.answer(
+        "Выбери, как часто повторять привычку:",
+        reply_markup=with_navigation(repeat_mode_keyboard(), back_cb="create:back:target"),
+    )
+
+
+async def _ask_reminder(message: Message, state: FSMContext) -> None:
+    await state.set_state(CreateHabit.waiting_reminder_toggle)
+    await message.answer(
+        "Нужно ли напоминание?",
+        reply_markup=with_navigation(reminder_initial_keyboard(), back_cb="create:back:repeat"),
+    )
 
 
 def _describe_repeat(repeat: Dict) -> str:
@@ -91,49 +160,55 @@ def _build_summary(data: Dict) -> str:
 @router.message(F.text == "➕ Добавить привычку")
 async def create_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await state.set_state(CreateHabit.waiting_name)
-    await message.answer(CREATE_PROMPT)
+    await _ask_name(message, state)
 
 
 @router.message(CreateHabit.waiting_name)
 async def create_set_name(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     name = (message.text or "").strip()
     if len(name) < 2:
-        await message.answer("Название должно содержать хотя бы 2 символа, попробуй ещё раз.")
+        await message.answer(
+            "Название должно содержать хотя бы 2 символа, попробуй ещё раз.",
+            reply_markup=navigation_keyboard(),
+        )
         return
     await state.update_data(name=name)
-    await state.set_state(CreateHabit.waiting_emoji)
-    await message.answer("Выбери эмодзи, которое будем показывать рядом с привычкой:", reply_markup=emoji_keyboard())
+    await _ask_emoji(message, state)
 
 
 @router.callback_query(CreateHabit.waiting_emoji, F.data.startswith("create:emoji:"))
 async def create_pick_emoji(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, value = callback.data.split(":", 2)
     if value == "custom":
-        await callback.message.answer("Отправь любое эмодзи или символ, который будем использовать.")
+        await state.set_state(CreateHabit.waiting_emoji)
+        await callback.message.answer(
+            "Отправь любое эмодзи или символ, который будем использовать.",
+            reply_markup=navigation_keyboard(back_cb="create:back:emoji"),
+        )
         await callback.answer()
         return
     await state.update_data(emoji=value)
-    await state.set_state(CreateHabit.waiting_description)
-    await callback.message.answer(
-        "Добавь короткое описание (например, цель или триггер) или пропусти шаг.",
-        reply_markup=skip_keyboard("create:description:skip"),
-    )
+    await _ask_description(callback.message, state)
     await callback.answer()
 
 
 @router.message(CreateHabit.waiting_emoji)
 async def create_custom_emoji(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     value = (message.text or "").strip()
     if not value:
-        await message.answer("Пришли хотя бы один символ или воспользуйся кнопками.")
+        await message.answer(
+            "Пришли хотя бы один символ или воспользуйся кнопками.",
+            reply_markup=navigation_keyboard(back_cb="create:back:emoji"),
+        )
         return
     await state.update_data(emoji=value[:2])
-    await state.set_state(CreateHabit.waiting_description)
-    await message.answer(
-        "Добавь короткое описание (например, цель или триггер) или пропусти шаг.",
-        reply_markup=skip_keyboard("create:description:skip"),
-    )
+    await _ask_description(message, state)
 
 
 @router.callback_query(CreateHabit.waiting_description, F.data == "create:description:skip")
@@ -145,14 +220,11 @@ async def create_description_skip(callback: CallbackQuery, state: FSMContext) ->
 
 @router.message(CreateHabit.waiting_description)
 async def create_set_description(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     await state.update_data(description=(message.text or "").strip())
     await _ask_start_date(message, state)
-
-
-async def _ask_start_date(message: Message, state: FSMContext) -> None:
-    await state.set_state(CreateHabit.waiting_start)
-    await message.answer("Когда стартуем?", reply_markup=start_date_keyboard())
-
 
 @router.callback_query(CreateHabit.waiting_start, F.data.startswith("create:start:"))
 async def create_start_date_callback(callback: CallbackQuery, state: FSMContext) -> None:
@@ -167,27 +239,28 @@ async def create_start_date_callback(callback: CallbackQuery, state: FSMContext)
         await state.update_data(start_date=as_iso(today + timedelta(days=1)))
         await _ask_target_date(callback.message, state)
     elif choice == "manual":
-        await callback.message.answer("Введи дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
+        await callback.message.answer(
+            "Введи дату в формате ДД.ММ или ДД.ММ.ГГГГ.",
+            reply_markup=navigation_keyboard(back_cb="create:back:start"),
+        )
     await callback.answer()
 
 
 @router.message(CreateHabit.waiting_start)
 async def create_start_date_manual(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     tz = await _user_zoneinfo(message.from_user.id)
     parsed = parse_user_date(message.text or "", tz)
     if not parsed:
-        await message.answer("Не смог распознать дату. Попробуй формат ДД.ММ.ГГГГ.")
+        await message.answer(
+            "Не смог распознать дату. Попробуй формат ДД.ММ.ГГГГ.",
+            reply_markup=navigation_keyboard(back_cb="create:back:start"),
+        )
         return
     await state.update_data(start_date=as_iso(parsed))
     await _ask_target_date(message, state)
-
-
-async def _ask_target_date(message: Message, state: FSMContext) -> None:
-    await state.set_state(CreateHabit.waiting_target)
-    await message.answer(
-        "Нужно задать дату завершения привычки? Это опционально.",
-        reply_markup=target_date_keyboard(),
-    )
 
 
 @router.callback_query(CreateHabit.waiting_target, F.data.startswith("create:target:"))
@@ -197,18 +270,24 @@ async def create_target_callback(callback: CallbackQuery, state: FSMContext) -> 
         await state.update_data(target_date=None)
         await _ask_repeat_mode(callback.message, state)
     elif choice == "manual":
-        await callback.message.answer("Введи дату завершения в формате ДД.ММ.ГГГГ или нажми «Без срока».")
+        await callback.message.answer(
+            "Введи дату завершения в формате ДД.ММ.ГГГГ или нажми «Без срока».",
+            reply_markup=navigation_keyboard(back_cb="create:back:target"),
+        )
     await callback.answer()
 
 
 @router.message(CreateHabit.waiting_target)
 async def create_target_manual(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     data = await state.get_data()
     start_iso = data.get("start_date")
     if not start_iso:
         await message.answer(
             "Сначала выбери дату начала привычки.",
-            reply_markup=start_date_keyboard(),
+            reply_markup=with_navigation(start_date_keyboard(), back_cb="create:back:description"),
         )
         await state.set_state(CreateHabit.waiting_start)
         return
@@ -216,46 +295,55 @@ async def create_target_manual(message: Message, state: FSMContext) -> None:
     tz = await _user_zoneinfo(message.from_user.id)
     parsed = parse_user_date(message.text or "", tz)
     if not parsed:
-        await message.answer("Дата не распознана, попробуй формат ДД.ММ.ГГГГ.")
+        await message.answer(
+            "Дата не распознана, попробуй формат ДД.ММ.ГГГГ.",
+            reply_markup=navigation_keyboard(back_cb="create:back:target"),
+        )
         return
     if parsed < start:
-        await message.answer("Дата завершения не может быть раньше старта.")
+        await message.answer(
+            "Дата завершения не может быть раньше старта.",
+            reply_markup=navigation_keyboard(back_cb="create:back:target"),
+        )
         return
     await state.update_data(target_date=as_iso(parsed))
     await _ask_repeat_mode(message, state)
 
 
-async def _ask_repeat_mode(message: Message, state: FSMContext) -> None:
-    await state.set_state(CreateHabit.waiting_repeat_mode)
-    await message.answer("Выбери, как часто повторять привычку:", reply_markup=repeat_mode_keyboard())
-
-
 @router.callback_query(CreateHabit.waiting_repeat_mode, F.data.startswith("create:repeat:"))
 async def create_repeat_mode(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, mode = callback.data.split(":", 2)
-    await state.update_data(repeat_mode=mode)
+    await state.update_data(repeat_mode=mode, repeat=None)
     if mode == "daily":
         await state.update_data(repeat={"mode": "daily"})
         await _ask_reminder(callback.message, state)
     elif mode == "weekdays":
         defaults = [0, 1, 2, 3, 4]
-        await state.update_data(selected_weekdays=defaults)
+        await state.update_data(selected_weekdays=defaults, repeat={"mode": "weekdays", "weekdays": defaults})
         await state.set_state(CreateHabit.waiting_repeat_payload)
         await callback.message.answer(
-            "Выбери дни недели, когда будем выполнять привычку:", reply_markup=weekdays_keyboard(defaults)
+            "Выбери дни недели, когда будем выполнять привычку:",
+            reply_markup=with_navigation(weekdays_keyboard(defaults), back_cb="create:back:repeat"),
         )
     elif mode == "weekly":
         await state.update_data(selected_weekdays=[])
         await state.set_state(CreateHabit.waiting_repeat_payload)
         await callback.message.answer(
-            "Выбери день недели (один):", reply_markup=weekdays_keyboard([])
+            "Выбери день недели (один):",
+            reply_markup=with_navigation(weekdays_keyboard([]), back_cb="create:back:repeat"),
         )
     elif mode == "monthly":
         await state.set_state(CreateHabit.waiting_repeat_payload)
-        await callback.message.answer("Укажи число месяца (1-31).")
+        await callback.message.answer(
+            "Укажи число месяца (1-31).",
+            reply_markup=navigation_keyboard(back_cb="create:back:repeat"),
+        )
     elif mode == "interval":
         await state.set_state(CreateHabit.waiting_repeat_payload)
-        await callback.message.answer("Через сколько дней повторять? Введи число, например 2.")
+        await callback.message.answer(
+            "Через сколько дней повторять? Введи число, например 2.",
+            reply_markup=navigation_keyboard(back_cb="create:back:repeat"),
+        )
     await callback.answer()
 
 
@@ -290,41 +378,50 @@ async def create_weekday_callback(callback: CallbackQuery, state: FSMContext) ->
             selected.append(weekday)
         selected.sort()
     await state.update_data(selected_weekdays=selected)
-    await callback.message.edit_reply_markup(reply_markup=weekdays_keyboard(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=with_navigation(weekdays_keyboard(selected), back_cb="create:back:repeat")
+    )
     await callback.answer()
 
 
 @router.message(CreateHabit.waiting_repeat_payload)
 async def create_repeat_payload_text(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     data = await state.get_data()
     mode = data.get("repeat_mode")
     text = (message.text or "").strip()
     if mode == "interval":
         if not text.isdigit() or int(text) < 1 or int(text) > 30:
-            await message.answer("Нужно число от 1 до 30.")
+            await message.answer(
+                "Нужно число от 1 до 30.",
+                reply_markup=navigation_keyboard(back_cb="create:back:repeat"),
+            )
             return
         interval = int(text)
         await state.update_data(repeat={"mode": "interval", "interval_days": interval})
         await _ask_reminder(message, state)
     elif mode == "monthly":
         if not text.isdigit():
-            await message.answer("Укажи число месяца от 1 до 31.")
+            await message.answer(
+                "Укажи число месяца от 1 до 31.",
+                reply_markup=navigation_keyboard(back_cb="create:back:repeat"),
+            )
             return
         day = int(text)
         if not 1 <= day <= 31:
-            await message.answer("Число месяца должно быть от 1 до 31.")
+            await message.answer(
+                "Число месяца должно быть от 1 до 31.",
+                reply_markup=navigation_keyboard(back_cb="create:back:repeat"),
+            )
             return
         await state.update_data(repeat={"mode": "monthly", "month_day": day})
         await _ask_reminder(message, state)
     else:
-        await message.answer("Используй кнопки выбора.")
-
-
-async def _ask_reminder(message: Message, state: FSMContext) -> None:
-    await state.set_state(CreateHabit.waiting_reminder_toggle)
-    await message.answer(
-        "Нужно ли напоминание?", reply_markup=reminder_initial_keyboard()
-    )
+        await message.answer(
+            "Используй кнопки выбора.", reply_markup=navigation_keyboard(back_cb="create:back:repeat")
+        )
 
 
 @router.callback_query(CreateHabit.waiting_reminder_toggle, F.data.startswith("create:reminder:"))
@@ -333,7 +430,10 @@ async def create_reminder_toggle(callback: CallbackQuery, state: FSMContext) -> 
     if choice == "on":
         user_settings = await get_user_settings(callback.from_user.id)
         default_time = user_settings.get("default_reminder_time", settings.default_reminder_time)
-        await state.update_data(reminder_enabled=True)
+        await state.update_data(
+            reminder_enabled=True,
+            reminder_default_time=default_time,
+        )
         await state.set_state(CreateHabit.waiting_reminder_time)
         await callback.message.answer(
             "Во сколько отправлять напоминание? Формат ЧЧ:ММ.",
@@ -356,19 +456,75 @@ async def create_reminder_default(callback: CallbackQuery, state: FSMContext) ->
 
 @router.callback_query(CreateHabit.waiting_reminder_time, F.data == "create:reminder:cancel")
 async def create_reminder_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(reminder_enabled=False, reminder_time=None)
+    await state.update_data(reminder_enabled=None, reminder_time=None)
     await _ask_reminder(callback.message, state)
     await callback.answer()
 
 
 @router.message(CreateHabit.waiting_reminder_time)
 async def create_reminder_time(message: Message, state: FSMContext) -> None:
+    if _is_cancel(message.text):
+        await _cancel_creation(message, state)
+        return
     text = (message.text or "").strip()
+    data = await state.get_data()
+    default_time = data.get("reminder_default_time", settings.default_reminder_time)
     if not TIME_RX.match(text):
-        await message.answer("Введи время в формате ЧЧ:ММ (например 08:30).")
+        await message.answer(
+            "Введи время в формате ЧЧ:ММ (например 08:30).",
+            reply_markup=reminder_time_entry_keyboard(default_time),
+        )
         return
     await state.update_data(reminder_time=text)
     await _show_summary(message, state)
+
+
+@router.callback_query(F.data == "create:cancel")
+async def create_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await _cancel_creation(callback.message, state)
+    await callback.answer("Отменено")
+
+
+@router.callback_query(F.data.startswith("create:back:"))
+async def create_back_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    target = callback.data.split(":", 2)[2]
+    if target == "name":
+        await state.update_data(
+            name=None,
+            emoji=None,
+            description="",
+            start_date=None,
+            target_date=None,
+            repeat=None,
+            repeat_mode=None,
+            selected_weekdays=[],
+            reminder_enabled=None,
+            reminder_time=None,
+            reminder_default_time=None,
+        )
+        await _ask_name(callback.message, state)
+    elif target == "emoji":
+        await state.update_data(emoji=None)
+        await _ask_emoji(callback.message, state)
+    elif target == "description":
+        await state.update_data(description="")
+        await _ask_description(callback.message, state)
+    elif target == "start":
+        await state.update_data(start_date=None, target_date=None, repeat=None, repeat_mode=None, selected_weekdays=[])
+        await _ask_start_date(callback.message, state)
+    elif target == "target":
+        await state.update_data(target_date=None, repeat=None, repeat_mode=None, selected_weekdays=[])
+        await _ask_target_date(callback.message, state)
+    elif target == "repeat":
+        await state.update_data(repeat=None, repeat_mode=None, selected_weekdays=[])
+        await _ask_repeat_mode(callback.message, state)
+    elif target == "reminder":
+        await state.update_data(reminder_enabled=None, reminder_time=None, reminder_default_time=None)
+        await _ask_reminder(callback.message, state)
+    else:
+        await callback.answer()
+        return
+    await callback.answer()
 
 
 async def _show_summary(message: Message, state: FSMContext) -> None:
