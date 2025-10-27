@@ -1,0 +1,21 @@
+name: reminders-cron
+
+on:
+  schedule:
+    # 09:00 и 20:00 по Алматы (UTC+5) => пересчёт в UTC:
+    # 09:00 ALMT = 04:00 UTC; 20:00 ALMT = 15:00 UTC
+    - cron: "0 4 * * *"
+    - cron: "0 15 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger reminders
+        run: |
+          curl -s -X POST "$WEBHOOK_BASE/cron-reminders" \
+               -H "X-CRON-SECRET: $CRON_SECRET"
+        env:
+          WEBHOOK_BASE: ${{ secrets.WEBHOOK_BASE }}
+          CRON_SECRET:  ${{ secrets.CRON_SECRET }}
