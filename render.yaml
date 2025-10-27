@@ -1,0 +1,15 @@
+services:
+  - type: worker
+    name: habit-tracker-bot
+    env: python
+    plan: starter # для реально always-on
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false # задашь вручную в Render Dashboard
+      - key: MONGO_URI
+        sync: false # строка подключения MongoDB Atlas
+      - key: TZ
+        value: Asia/Almaty
